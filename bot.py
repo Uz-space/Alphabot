@@ -16,8 +16,12 @@ from rich.prompt import Prompt
 from rich.progress import Progress, SpinnerColumn, BarColumn, TextColumn
 from rich import box
 from rich.align import Align
+from rich.live import Live
+from rich.console import Group
 from threading import Thread
 import threading
+import shutil
+import termios
 
 # --- [ CONFIGURATION ] ---
 CONFIG_FILE = "tronpick_config.json"
@@ -26,6 +30,32 @@ console = Console()
 logs = []
 current_next_claim = "00:00"
 stop_updater = False
+claim_time_remaining = 0  # Yangi o'zgaruvchi - faqat timer uchun
+
+try:
+    import termios
+    _HAS_TERMIOS = True
+except ImportError:
+    _HAS_TERMIOS = False
+
+def _disable_echo():
+    if not _HAS_TERMIOS or not sys.stdin.isatty():
+        return None
+    try:
+        old_settings = termios.tcgetattr(sys.stdin)
+        new_settings = termios.tcgetattr(sys.stdin)
+        new_settings[3] = new_settings[3] & ~termios.ECHO
+        termios.tcsetattr(sys.stdin, termios.TCSADRAIN, new_settings)
+        return old_settings
+    except Exception:
+        return None
+
+def _restore_echo(old_settings):
+    if _HAS_TERMIOS and old_settings is not None:
+        try:
+            termios.tcsetattr(sys.stdin, termios.TCSADRAIN, old_settings)
+        except Exception:
+            pass
 
 def clear():
     os.system('clear' if os.name != 'nt' else 'cls')
@@ -128,6 +158,7 @@ class TronPickBot:
             return False, f"Network Error: {str(e)}"
 
     def update_info(self):
+        global claim_time_remaining
         try:
             res = self.session.get(f"https://{self.domain}/faucet.php", headers={'User-Agent': self.ua}, timeout=20)
             bal = re.search(r'user_balance">([\d.]+)', res.text)
@@ -135,7 +166,12 @@ class TronPickBot:
             lvl = re.search(r'Your level is\s*<b>(.*?)</b>', res.text)
             if lvl: self.level = lvl.group(1)
             tmr = re.search(r'show_countdown_clock\((\d+)\)', res.text)
-            self.next_claim = int(tmr.group(1)) if tmr else 0
+            if tmr:
+                self.next_claim = int(tmr.group(1))
+                claim_time_remaining = self.next_claim  # Timerga o'rnatamiz
+            else:
+                self.next_claim = 0
+                claim_time_remaining = 0
         except: pass
 
     def claim(self):
@@ -167,58 +203,42 @@ class TronPickBot:
         except: add_log("Claim Server Timeout", "red")
 
 def update_timer(bot):
-    global current_next_claim, stop_updater
+    global current_next_claim, stop_updater, claim_time_remaining
     while not stop_updater:
-        if bot.next_claim > 0:
-            mins, secs = divmod(bot.next_claim, 60)
+        if claim_time_remaining > 0:
+            mins, secs = divmod(claim_time_remaining, 60)
             current_next_claim = f"{mins:02d}:{secs:02d}"
-            bot.next_claim -= 1
+            claim_time_remaining -= 1
         else:
             current_next_claim = "00:00"
         time.sleep(1)
 
-def draw_dashboard(bot):
-    clear()
-    
-    # Sarlavha
-    console.print(Align.center("[bold white]╔════════════════════════════════════════╗[/]"))
-    console.print(Align.center("[bold white]║           TRONPICK MULTI-BOT PRO       ║[/]"))
-    console.print(Align.center("[bold white]╚════════════════════════════════════════╝[/]"))
-    console.print()
-
-    # STATS panel - kichik va ixcham
+def build_dashboard(bot):
+    """Yangi UI - Live bilan ishlaydi"""
+    # STATS panel
     stats_table = Table(show_header=True, header_style="bold white", box=box.ROUNDED, expand=True)
-    stats_table.add_column("ACCOUNT", justify="left", style="cyan")
-    stats_table.add_column("BALANCE (TRX)", justify="center", style="yellow")
-    stats_table.add_column("NEXT CLAIM IN", justify="center", style="magenta")
+    stats_table.add_column("ACCOUNT", justify="left", style="cyan", ratio=1, no_wrap=True)
+    stats_table.add_column("BALANCE (TRX)", justify="center", style="yellow", ratio=1, no_wrap=True)
+    stats_table.add_column("NEXT CLAIM IN", justify="center", style="magenta", ratio=1, no_wrap=True)
     stats_table.add_row(bot.email, bot.balance, current_next_claim)
-    console.print(Panel(stats_table, title="[bold white]TRX STATS[/]", border_style="bright_blue"))
-    console.print()
+    stats_panel = Panel(stats_table, title="[bold white]TRX STATS[/]", border_style="bright_blue")
 
-    # LOGS panel - 85% kattalikda
-    try:
-        import shutil
-        term_width, term_height = shutil.get_terminal_size()
-    except:
-        term_width, term_height = 100, 30
-    
-    # Loglarni ko'rsatish uchun 85% (stats va sarlavhadan keyin qolgan joyning 85%)
-    max_lines = int((term_height - 8) * 0.85)  # 85% foiz
-    
-    # Oxirgi loglarni olish
+    # LOGS panel
+    term_height = console.size.height
+    max_lines = max(int((term_height - 5) * 0.90), 3)
     log_content = "\n".join(logs[-max_lines:]) if logs else "➜ Initializing..."
-    
-    # Log panelini 85% kattalikda
-    console.print(Panel(
+    logs_panel = Panel(
         log_content,
         title="[bold yellow]📋 LIVE LOGS[/]",
         border_style="bright_yellow",
         padding=(0, 1),
         height=max_lines + 2
-    ))
+    )
+
+    return Group(stats_panel, logs_panel)
 
 def main():
-    global stop_updater
+    global stop_updater, claim_time_remaining
     if os.path.exists(CONFIG_FILE):
         with open(CONFIG_FILE, "r") as f: conf = json.load(f)
     else:
@@ -234,25 +254,38 @@ def main():
         if os.path.exists(CONFIG_FILE): os.remove(CONFIG_FILE)
         return
 
+    # Ma'lumotlarni birinchi marta yangilash
+    bot.update_info()
+    claim_time_remaining = bot.next_claim
+
     # Start timer thread
     stop_updater = False
     timer_thread = Thread(target=update_timer, args=(bot,))
     timer_thread.daemon = True
     timer_thread.start()
 
-    while True:
-        bot.update_info()
-        draw_dashboard(bot)
-        if bot.next_claim <= 0:
-            bot.claim()
-        else:
-            wait_time = bot.next_claim
-            with Progress(SpinnerColumn(), TextColumn("[bold cyan]➜ NEXT CLAIM IN:[/] [bold yellow]{task.fields[rem]}"), BarColumn(bar_width=25), console=console, transient=True) as p:
-                task = p.add_task("", total=wait_time, rem="")
-                while wait_time > 0:
-                    mins, secs = divmod(wait_time, 60)
-                    p.update(task, advance=1, rem=f"{mins:02d}m {secs:02d}s")
-                    time.sleep(1); wait_time -= 1
+    old_echo_settings = _disable_echo()
+    try:
+        with Live(build_dashboard(bot), console=console, refresh_per_second=4, screen=True) as live:
+            while True:
+                # Faqat claim vaqti 0 bo'lganda yangilaymiz
+                if claim_time_remaining <= 0:
+                    bot.update_info()
+                    claim_time_remaining = bot.next_claim
+                    if claim_time_remaining <= 0:
+                        # Claim qilish vaqti keldi
+                        bot.claim()
+                        bot.update_info()
+                        claim_time_remaining = bot.next_claim
+                    live.update(build_dashboard(bot))
+                else:
+                    live.update(build_dashboard(bot))
+                    time.sleep(0.25)
+    except KeyboardInterrupt:
+        stop_updater = True
+        sys.exit()
+    finally:
+        _restore_echo(old_echo_settings)
 
 if __name__ == "__main__":
     try:
