@@ -24,7 +24,7 @@ import shutil
 import termios
 
 # --- [ CONFIGURATION ] ---
-CONFIG_FILE = "litepick_config.json"
+CONFIG_FILE = "bnbpick_config.json"
 CHANNEL = "C4COIN"
 console = Console()
 logs = []
@@ -70,14 +70,14 @@ def add_log(msg, style="white", account=""):
 def generate_fp(length=16):
     return ''.join(random.choices(string.ascii_letters + string.digits, k=length))
 
-class LitePickBot:
+class BNBPickBot:
     def __init__(self, email, password, api_key, account_name=""):
         self.session = requests.Session()
         self.email = email
         self.password = password
         self.api_key = api_key
         self.account_name = account_name if account_name else email.split('@')[0]
-        self.domain = "litepick.io"
+        self.domain = "bnbpick.io"
         self.balance = "0.00000000"
         self.level = "Stone"
         self.next_claim = 0
@@ -100,24 +100,22 @@ class LitePickBot:
         try:
             add_log(f"Sending {action} Captcha to Xevil Cloud...", "yellow", self.account_name)
             
-            # 1. Captcha yuborish
             payload = {
                 'key': self.api_key,
                 'method': 'turnstile',
-                'sitekey': '0x4AAAAAAA0-UWDHOKP0OrgS',  # Litepick Turnstile sitekey
+                'sitekey': '0x4AAAAAAA0_O3uScCqtpqXl',  # BNBPick Turnstile sitekey
                 'pageurl': f'https://{self.domain}/faucet.php',
                 'json': 1
             }
             
-            add_log(f"Sitekey: 0x4AAAAAAA0-UWDHOKP0OrgS", "grey", self.account_name)
+            add_log(f"Sitekey: 0x4AAAAAAA0_O3uScCqtpqXl", "grey", self.account_name)
             
             res = requests.post("https://api.sctg.xyz/in.php", data=payload, timeout=30)
-            add_log(f"Response: {res.text[:100]}", "grey", self.account_name)
             
             try:
                 res_json = res.json()
             except:
-                add_log(f"Invalid JSON response: {res.text}", "red", self.account_name)
+                add_log(f"Invalid JSON response: {res.text[:100]}", "red", self.account_name)
                 return None
                 
             if res_json.get('status') != 1:
@@ -127,7 +125,6 @@ class LitePickBot:
             rid = res_json.get('request')
             add_log(f"Captcha ID: {rid}", "grey", self.account_name)
             
-            # 2. Natijani kutish
             for i in range(40):
                 time.sleep(3)
                 g = requests.get(
@@ -169,10 +166,9 @@ class LitePickBot:
 
     def login(self):
         try:
-            add_log("Connecting to LitePick Server...", "cyan", self.account_name)
+            add_log("Connecting to BNBPick Server...", "cyan", self.account_name)
             self.session.cookies.set('fp', self.fp, domain=self.domain)
 
-            # 1. Login sahifasini ochish
             try:
                 response = self.session.get(
                     f"https://{self.domain}/login.php", 
@@ -189,7 +185,6 @@ class LitePickBot:
                     timeout=30
                 )
 
-            # 2. CSRF token olish
             csrf = self.session.cookies.get('csrf_cookie_name')
             if not csrf:
                 add_log("❌ Failed to get CSRF. Try VPN or Check IP.", "red", self.account_name)
@@ -197,7 +192,6 @@ class LitePickBot:
             
             add_log(f"CSRF Token: {csrf}", "grey", self.account_name)
 
-            # 3. Captcha yechish
             token = self.solve_captcha("login")
             if not token:
                 add_log("❌ Captcha Failed", "red", self.account_name)
@@ -205,7 +199,6 @@ class LitePickBot:
             
             add_log(f"Captcha Token: {token[:30]}...", "grey", self.account_name)
 
-            # 4. Login so'rovi
             payload = {
                 'action': "login",
                 'email': self.email,
@@ -261,17 +254,14 @@ class LitePickBot:
                 timeout=20
             )
             
-            # Balans
             bal = re.search(r'user_balance">([\d.]+)', res.text)
             if bal: 
                 self.balance = bal.group(1)
             
-            # Level
             lvl = re.search(r'Your level is\s*<b>(.*?)</b>', res.text)
             if lvl: 
                 self.level = lvl.group(1)
             
-            # Vaqt
             tmr = re.search(r'show_countdown_clock\((\d+)\)', res.text)
             if tmr:
                 self.next_claim = int(tmr.group(1))
@@ -288,28 +278,24 @@ class LitePickBot:
         try:
             add_log("Starting Faucet Claim...", "magenta", self.account_name)
             
-            # 1. Captcha yechish
             token = self.solve_captcha("claim")
             if not token:
                 add_log("❌ Claim captcha failed", "red", self.account_name)
                 return
 
-            # 2. CSRF token
             csrf = self.session.cookies.get('csrf_cookie_name')
             if not csrf:
                 add_log("❌ No CSRF token for claim", "red", self.account_name)
                 return
 
-            # 3. Hash yaratish
             ts = int(time.time())
             data_str = f"{random.randint(100,200)}:{random.randint(10,50)}:{ts}"
-            xor_key = "bd98ddb15b2b9e248ff50123976abe8600e27d3b5c08be9f864267d35e07930b"
+            xor_key = "6180d2fbdec26dd9399e9f7e4401610575ba7db0dded7d97a5f2efcc7f897491"
             hashed = base64.b64encode(
                 "".join(chr(ord(c) ^ ord(xor_key[i % len(xor_key)])) 
                 for i, c in enumerate(data_str)).encode()
             ).decode()
 
-            # 4. Claim so'rovi
             payload = {
                 'action': 'claim_hourly_faucet',
                 'hash': hashed,
@@ -366,7 +352,7 @@ def account_worker(bot, stop_event):
 def build_dashboard(accounts):
     stats_table = Table(show_header=True, header_style="bold white", box=box.ROUNDED, expand=True)
     stats_table.add_column("ACCOUNT", justify="left", style="cyan", ratio=1, no_wrap=True)
-    stats_table.add_column("BALANCE (LTC)", justify="center", style="yellow", ratio=1, no_wrap=True)
+    stats_table.add_column("BALANCE (BNB)", justify="center", style="yellow", ratio=1, no_wrap=True)
     stats_table.add_column("NEXT CLAIM IN", justify="center", style="magenta", ratio=1, no_wrap=True)
     stats_table.add_column("LEVEL", justify="center", style="green", ratio=1, no_wrap=True)
     stats_table.add_column("STATUS", justify="center", style="white", ratio=1, no_wrap=True)
@@ -387,7 +373,7 @@ def build_dashboard(accounts):
             status
         )
     
-    stats_panel = Panel(stats_table, title="[bold white]📊 LTC STATS - MULTI ACCOUNT[/]", border_style="bright_blue")
+    stats_panel = Panel(stats_table, title="[bold white]📊 BNB STATS - MULTI ACCOUNT[/]", border_style="bright_blue")
 
     term_height = console.size.height
     max_lines = max(int((term_height - 5) * 0.90), 3)
@@ -405,7 +391,7 @@ def build_dashboard(accounts):
 def show_menu(accounts_config):
     clear()
     console.print(Panel.fit(
-        "[bold cyan]⚡ LITEPICK MULTI-ACCOUNT BOT ⚡[/]",
+        "[bold cyan]⚡ BNBPICK MULTI-ACCOUNT BOT ⚡[/]",
         border_style="bright_blue"
     ))
     
@@ -580,7 +566,7 @@ def main():
             console.print(f"[red]❌ No API key for {acc.get('account_name', acc['email'])}![/]")
             continue
             
-        bot = LitePickBot(
+        bot = BNBPickBot(
             acc['email'],
             acc['password'],
             api_key,
